@@ -3,62 +3,84 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+from pathlib import Path
 
 # =========================
 # Config
 # =========================
 st.set_page_config(page_title="Malaysia Federal Finance Allocation Dashboard", layout="wide")
 
-# =========================
-# Load data
-# =========================
 st.title("📊 Data Exploration Dashboard: Federal Finance Allocation (1970–2023)")
 
+# =========================
+# Data Loading (Cloud + Local compatible)
+# =========================
 st.sidebar.header("1) Data Source")
-use_uploaded_path = st.sidebar.checkbox(
-    "Use fixed path (your uploaded file in this environment)", value=True
+
+data_mode = st.sidebar.radio(
+    "Choose data source",
+    ["Use repo dataset (GitHub/Streamlit Cloud)", "Upload CSV", "Use local path (VS Code only)"],
+    index=0
 )
 
-DEFAULT_PATH = r"C:\Users\User\OneDrive - National Defence University of Malaysia\Documents\BIG DATA\federal_finance_year_de (1).csv"
+# Path in your GitHub repo (recommended)
+REPO_DATA_PATH = Path("data") / "federal_finance_year_de (1).csv"
 
-uploaded = None
-if not use_uploaded_path:
-    uploaded = st.sidebar.file_uploader("Upload your CSV (same format)", type=["csv"])
+# Local path (only works on your computer)
+LOCAL_DATA_PATH = r"C:\Users\User\OneDrive - National Defence University of Malaysia\Documents\BIG DATA\federal_finance_year_de (1).csv"
 
 @st.cache_data
 def load_data(path_or_buffer):
     df = pd.read_csv(path_or_buffer)
-    # basic cleaning
+
+    # Basic cleaning
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["year"] = df["date"].dt.year
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
     df = df.dropna(subset=["year", "value"])
     df["year"] = df["year"].astype(int)
 
-    # normalize text columns
+    # Normalize text columns
     for c in ["category", "function"]:
         if c in df.columns:
             df[c] = df[c].astype(str).str.strip().str.lower()
 
     return df
 
-if use_uploaded_path:
-    df = load_data(DEFAULT_PATH)
-else:
+if data_mode == "Use repo dataset (GitHub/Streamlit Cloud)":
+    if not REPO_DATA_PATH.exists():
+        st.error(
+            f"Dataset not found: {REPO_DATA_PATH}\n\n"
+            "✅ Fix: In your GitHub repo, create a folder named `data/` and upload your CSV there.\n"
+            "Expected file path:\n"
+            "data/federal_finance_year_de (1).csv"
+        )
+        st.stop()
+    df = load_data(REPO_DATA_PATH)
+
+elif data_mode == "Upload CSV":
+    uploaded = st.sidebar.file_uploader("Upload your CSV (same format)", type=["csv"])
     if uploaded is None:
-        st.info("Upload your CSV to begin, or tick 'Use fixed path'.")
+        st.info("Upload your CSV to begin.")
         st.stop()
     df = load_data(uploaded)
+
+else:  # Local path
+    try:
+        df = load_data(LOCAL_DATA_PATH)
+    except FileNotFoundError:
+        st.error(
+            "Local file not found.\n\n"
+            f"Check your path:\n{LOCAL_DATA_PATH}\n\n"
+            "Or switch to 'Upload CSV' / 'Use repo dataset'."
+        )
+        st.stop()
 
 # =========================
 # Helper: build sector view
 # =========================
 def build_wide(df, level="category", include_total=False):
-    """
-    Returns:
-      wide_df: year x sector (values)
-      total_series: year -> total allocation (from total/total if exists else sum of sectors)
-    """
     d = df.copy()
 
     # Total row usually: category=total & function=total
@@ -69,15 +91,10 @@ def build_wide(df, level="category", include_total=False):
         total_series = None
 
     if level == "category":
-        # categories include: total, defence, economy, social, admin
         sector_col = "category"
-        # if exclude total:
         if not include_total:
             d = d[d["category"] != "total"]
-        # use rows where function is total (category total line), if present
-        # BUT your data has category groups and function breakdown. For category totals:
-        # best approximation is: rows where function == 'total' for each category,
-        # if they exist. If not, sum functions within category.
+
         cat_tot = d[d["function"] == "total"]
         if len(cat_tot) > 0:
             g = cat_tot.groupby(["year", sector_col])["value"].sum().reset_index()
@@ -85,7 +102,6 @@ def build_wide(df, level="category", include_total=False):
             g = d.groupby(["year", sector_col])["value"].sum().reset_index()
 
     elif level == "function":
-        # function includes: education, health, housing, transport, etc + total
         sector_col = "function"
         if not include_total:
             d = d[d["function"] != "total"]
@@ -96,11 +112,11 @@ def build_wide(df, level="category", include_total=False):
 
     wide = g.pivot(index="year", columns=sector_col, values="value").sort_index()
 
-    # If total_series not found, compute from wide sum
     if total_series is None:
         total_series = wide.sum(axis=1)
 
     return wide, total_series
+
 
 def summary_stats(wide_df):
     stats = pd.DataFrame({
@@ -116,15 +132,13 @@ def summary_stats(wide_df):
     }).sort_values("latest", ascending=False)
     return stats
 
+
 def detect_outliers_zscore(series, window=7, z_thresh=2.5):
-    """
-    Rolling z-score outlier detection.
-    Returns a DataFrame with year, value, rolling_mean, rolling_std, zscore, is_outlier
-    """
     s = series.dropna().copy()
-    rm = s.rolling(window, min_periods=max(3, window//2)).mean()
-    rs = s.rolling(window, min_periods=max(3, window//2)).std(ddof=0)
+    rm = s.rolling(window, min_periods=max(3, window // 2)).mean()
+    rs = s.rolling(window, min_periods=max(3, window // 2)).std(ddof=0)
     z = (s - rm) / rs.replace(0, np.nan)
+
     out = pd.DataFrame({
         "year": s.index,
         "value": s.values,
@@ -177,7 +191,6 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # =========================
 with tab1:
     st.subheader("1. Summary Statistics")
-
     stats = summary_stats(wide_sel)
 
     colA, colB = st.columns([1.2, 0.8])
@@ -187,7 +200,6 @@ with tab1:
         st.dataframe(stats, use_container_width=True)
 
     with colB:
-        # largest/smallest by latest year
         latest_year = wide_sel.index.max()
         latest_values = wide_sel.loc[latest_year].sort_values(ascending=False)
 
@@ -214,7 +226,6 @@ with tab2:
 
     c1, c2 = st.columns(2)
     with c1:
-        # histogram (long)
         long_df = wide_sel.reset_index().melt(id_vars="year", var_name="sector", value_name="allocation")
         fig_hist = px.histogram(
             long_df, x="allocation", color="sector", barmode="overlay",
@@ -232,6 +243,7 @@ with tab2:
     st.divider()
     st.subheader("Skewness + Simple outlier flags (IQR rule)")
     skew = wide_sel.skew(numeric_only=True)
+
     outlier_flags = []
     for s in selected_sectors:
         x = wide_sel[s].dropna()
@@ -267,7 +279,6 @@ with tab2:
         st.dataframe(out_only[["sector", "year", "value", "zscore"]], use_container_width=True)
 
     with c4:
-        # plot one sector with outliers
         sector_for_plot = st.selectbox("Plot outliers for sector", selected_sectors, index=0)
         out_s = out_all[out_all["sector"] == sector_for_plot].set_index("year")
 
@@ -301,10 +312,7 @@ with tab3:
         cur = wide_sel[s]
         prev = wide_sel[s].shift(1)
         valid = pd.concat([cur, prev], axis=1).dropna()
-        if len(valid) >= 3:
-            r = valid.iloc[:, 0].corr(valid.iloc[:, 1])
-        else:
-            r = np.nan
+        r = valid.iloc[:, 0].corr(valid.iloc[:, 1]) if len(valid) >= 3 else np.nan
         lag_rows.append((s, float(r) if pd.notna(r) else np.nan))
 
     lag_df = pd.DataFrame(lag_rows, columns=["sector", "corr(current, previous_year)"]).sort_values(
@@ -313,8 +321,8 @@ with tab3:
     st.dataframe(lag_df, use_container_width=True)
 
     st.info(
-        "Note: GDP growth correlation needs a GDP dataset (year + GDP growth). "
-        "If you provide a GDP file, you can merge by year and compute Pearson correlation the same way."
+        "GDP growth correlation requires a GDP dataset (year + GDP growth). "
+        "If you upload a GDP file, you can merge by year and compute Pearson correlation."
     )
 
 # =========================
@@ -323,7 +331,6 @@ with tab3:
 with tab4:
     st.subheader("4. Trend Analysis (1970–2023)")
 
-    # Trend line
     long_tr = wide_sel.reset_index().melt(id_vars="year", var_name="sector", value_name="allocation")
     fig_line = px.line(long_tr, x="year", y="allocation", color="sector", markers=True, title="Allocation Trends")
     st.plotly_chart(fig_line, use_container_width=True)
@@ -350,10 +357,7 @@ with tab4:
     st.divider()
     st.subheader("5. Sector Prioritization (Share of Total)")
 
-    # share of total
-    total_use = total_f.reindex(wide_f.index).loc[year_range[0]:year_range[1]]
-    total_use = total_use.replace(0, np.nan)
-
+    total_use = total_f.reindex(wide_f.index).loc[year_range[0]:year_range[1]].replace(0, np.nan)
     share = wide_sel.divide(total_use, axis=0) * 100
     long_share = share.reset_index().melt(id_vars="year", var_name="sector", value_name="share_pct")
 
@@ -376,8 +380,8 @@ with tab4:
     if "state" in df.columns:
         st.success("Detected a 'state' column ✅ Showing state-level analysis.")
         reg = df.copy()
-        reg = reg[(reg["year"].between(year_range[0], year_range[1]))]
-        # choose sector field based on dashboard level
+        reg = reg[reg["year"].between(year_range[0], year_range[1])]
+
         if level == "category":
             reg_sector = st.selectbox("Choose category", sorted(reg["category"].unique()))
             reg = reg[reg["category"] == reg_sector]
@@ -387,6 +391,7 @@ with tab4:
 
         reg_p = reg.groupby(["year", "state"])["value"].sum().reset_index()
         pivot_reg = reg_p.pivot(index="state", columns="year", values="value")
+
         st.write("**Heatmap (State x Year)**")
         fig_hm = px.imshow(pivot_reg, aspect="auto", title=f"State Allocation Heatmap ({reg_sector})")
         st.plotly_chart(fig_hm, use_container_width=True)
@@ -395,32 +400,32 @@ with tab4:
 
     st.divider()
     st.subheader("8. Comparative Analysis (ASEAN benchmarking)")
-
-    st.write("If you have ASEAN data, upload a CSV with columns like:")
+    st.write("Upload an ASEAN file with columns: `country, year, sector, value`")
     st.code("country, year, sector, value", language="text")
 
     asean_file = st.file_uploader("Upload ASEAN benchmark CSV (optional)", type=["csv"], key="asean")
     if asean_file is not None:
         asean = pd.read_csv(asean_file)
+
         for c in ["country", "sector"]:
             if c in asean.columns:
                 asean[c] = asean[c].astype(str).str.strip().str.lower()
+
         asean["year"] = pd.to_numeric(asean["year"], errors="coerce").astype("Int64")
         asean["value"] = pd.to_numeric(asean["value"], errors="coerce")
         asean = asean.dropna(subset=["year", "value", "country", "sector"])
 
         sector_pick = st.selectbox("Choose sector for ASEAN comparison", sorted(asean["sector"].unique()))
         years_common = sorted(set(asean["year"].dropna().astype(int).unique()) & set(wide_sel.index))
+
         if len(years_common) == 0:
             st.warning("No overlapping years between your dataset and ASEAN file.")
         else:
             yr_pick = st.selectbox("Choose year (overlapping)", years_common, index=len(years_common)-1)
 
-            # Malaysia value from our dataset for selected sector (if exists)
             my_val = None
-            if sector_pick in wide.columns:
-                if yr_pick in wide.index:
-                    my_val = wide.loc[yr_pick, sector_pick]
+            if sector_pick in wide.columns and yr_pick in wide.index:
+                my_val = wide.loc[yr_pick, sector_pick]
 
             comp = asean[(asean["sector"] == sector_pick) & (asean["year"] == yr_pick)].copy()
             comp = comp.sort_values("value", ascending=False)
