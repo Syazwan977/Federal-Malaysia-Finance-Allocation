@@ -9,11 +9,10 @@ from pathlib import Path
 # Config
 # =========================
 st.set_page_config(page_title="Malaysia Federal Finance Allocation Dashboard", layout="wide")
-
 st.title("📊 Data Exploration Dashboard: Federal Finance Allocation (1970–2023)")
 
 # =========================
-# Data Loading (Cloud + Local compatible)
+# Data Source (Cloud + Local compatible)
 # =========================
 st.sidebar.header("1) Data Source")
 
@@ -23,17 +22,17 @@ data_mode = st.sidebar.radio(
     index=0
 )
 
-# Path in your GitHub repo (recommended)
-REPO_DATA_PATH = Path("data") / "federal_finance_year_de (1).csv"
+# ✅ Expected path in GitHub repo
+REPO_DATA_PATH = Path("data") / "federal_finance.csv"
 
-# Local path (only works on your computer)
+# ✅ Local path (works ONLY on your PC)
 LOCAL_DATA_PATH = r"C:\Users\User\OneDrive - National Defence University of Malaysia\Documents\BIG DATA\federal_finance_year_de (1).csv"
 
 @st.cache_data
 def load_data(path_or_buffer):
     df = pd.read_csv(path_or_buffer)
 
-    # Basic cleaning
+    # basic cleaning
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["year"] = df["date"].dt.year
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
@@ -41,7 +40,7 @@ def load_data(path_or_buffer):
     df = df.dropna(subset=["year", "value"])
     df["year"] = df["year"].astype(int)
 
-    # Normalize text columns
+    # normalize text columns
     for c in ["category", "function"]:
         if c in df.columns:
             df[c] = df[c].astype(str).str.strip().str.lower()
@@ -51,13 +50,25 @@ def load_data(path_or_buffer):
 if data_mode == "Use repo dataset (GitHub/Streamlit Cloud)":
     if not REPO_DATA_PATH.exists():
         st.error(
-            f"Dataset not found: {REPO_DATA_PATH}\n\n"
-            "✅ Fix: In your GitHub repo, create a folder named `data/` and upload your CSV there.\n"
-            "Expected file path:\n"
-            "data/federal_finance_year_de (1).csv"
+            "❌ Dataset not found in Streamlit Cloud.\n\n"
+            "✅ Fix your GitHub repo structure to:\n"
+            "data/federal_finance.csv\n\n"
+            "Open your GitHub repo → create folder `data/` → upload the CSV renamed as `federal_finance.csv`."
         )
+
+        # Helpful debug (shows what Cloud sees)
+        st.write("### Debug: Files in repo root")
+        st.code("\n".join(sorted([p.name for p in Path('.').iterdir() if p.is_file()])))
+        if Path("data").exists():
+            st.write("### Debug: Files in data/ folder")
+            st.code("\n".join(sorted([p.name for p in Path('data').iterdir() if p.is_file()])))
+        else:
+            st.warning("No `data/` folder found in the deployed repo.")
+
         st.stop()
+
     df = load_data(REPO_DATA_PATH)
+    st.sidebar.success("Loaded: data/federal_finance.csv ✅")
 
 elif data_mode == "Upload CSV":
     uploaded = st.sidebar.file_uploader("Upload your CSV (same format)", type=["csv"])
@@ -69,9 +80,10 @@ elif data_mode == "Upload CSV":
 else:  # Local path
     try:
         df = load_data(LOCAL_DATA_PATH)
+        st.sidebar.success("Loaded local file ✅")
     except FileNotFoundError:
         st.error(
-            "Local file not found.\n\n"
+            "❌ Local file not found.\n\n"
             f"Check your path:\n{LOCAL_DATA_PATH}\n\n"
             "Or switch to 'Upload CSV' / 'Use repo dataset'."
         )
@@ -83,7 +95,6 @@ else:  # Local path
 def build_wide(df, level="category", include_total=False):
     d = df.copy()
 
-    # Total row usually: category=total & function=total
     total_rows = d[(d["category"] == "total") & (d["function"] == "total")]
     if len(total_rows) > 0:
         total_series = total_rows.groupby("year")["value"].sum().sort_index()
@@ -191,8 +202,8 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # =========================
 with tab1:
     st.subheader("1. Summary Statistics")
-    stats = summary_stats(wide_sel)
 
+    stats = summary_stats(wide_sel)
     colA, colB = st.columns([1.2, 0.8])
 
     with colA:
@@ -225,8 +236,9 @@ with tab2:
     st.subheader("2. Distribution Analysis")
 
     c1, c2 = st.columns(2)
+    long_df = wide_sel.reset_index().melt(id_vars="year", var_name="sector", value_name="allocation")
+
     with c1:
-        long_df = wide_sel.reset_index().melt(id_vars="year", var_name="sector", value_name="allocation")
         fig_hist = px.histogram(
             long_df, x="allocation", color="sector", barmode="overlay",
             nbins=30, title="Histogram of Allocations (Selected Sectors)"
@@ -242,8 +254,8 @@ with tab2:
 
     st.divider()
     st.subheader("Skewness + Simple outlier flags (IQR rule)")
-    skew = wide_sel.skew(numeric_only=True)
 
+    skew = wide_sel.skew(numeric_only=True)
     outlier_flags = []
     for s in selected_sectors:
         x = wide_sel[s].dropna()
@@ -284,12 +296,9 @@ with tab2:
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=wide_sel.index, y=wide_sel[sector_for_plot], mode="lines+markers", name="allocation"))
-
         out_pts = out_s[out_s["is_outlier"]]
-        fig.add_trace(go.Scatter(
-            x=out_pts.index, y=out_pts["value"], mode="markers",
-            name="outliers", marker=dict(size=12, symbol="x")
-        ))
+        fig.add_trace(go.Scatter(x=out_pts.index, y=out_pts["value"], mode="markers", name="outliers",
+                                 marker=dict(size=12, symbol="x")))
         fig.update_layout(title=f"Outliers for {sector_for_plot} (Rolling z-score)")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -320,10 +329,7 @@ with tab3:
     )
     st.dataframe(lag_df, use_container_width=True)
 
-    st.info(
-        "GDP growth correlation requires a GDP dataset (year + GDP growth). "
-        "If you upload a GDP file, you can merge by year and compute Pearson correlation."
-    )
+    st.info("GDP growth correlation needs a separate GDP growth dataset (year + GDP growth).")
 
 # =========================
 # TAB 4: Trends + Prioritization + Benchmarks
@@ -344,16 +350,6 @@ with tab4:
                       title="Year-on-Year % Change (Selected Sectors)")
     st.plotly_chart(fig_pct, use_container_width=True)
 
-    st.write("**Top increases/decreases (latest year vs previous year):**")
-    ly = wide_sel.index.max()
-    if ly - 1 in wide_sel.index:
-        delta = (wide_sel.loc[ly] - wide_sel.loc[ly - 1]).sort_values(ascending=False)
-        pct_delta = (wide_sel.loc[ly] / wide_sel.loc[ly - 1] - 1) * 100
-        show = pd.DataFrame({"change_abs": delta, "change_pct": pct_delta}).sort_values("change_abs", ascending=False)
-        st.dataframe(show, use_container_width=True)
-    else:
-        st.warning("Not enough years selected to compute latest vs previous year changes.")
-
     st.divider()
     st.subheader("5. Sector Prioritization (Share of Total)")
 
@@ -362,14 +358,14 @@ with tab4:
     long_share = share.reset_index().melt(id_vars="year", var_name="sector", value_name="share_pct")
 
     c5, c6 = st.columns(2)
-
     with c5:
         fig_share = px.area(long_share, x="year", y="share_pct", color="sector",
                             title="Share of Total Allocation Over Time (%)")
         st.plotly_chart(fig_share, use_container_width=True)
 
     with c6:
-        year_for_pie = st.selectbox("Choose year for pie chart", sorted(wide_sel.index.tolist()), index=len(wide_sel.index)-1)
+        year_for_pie = st.selectbox("Choose year for pie chart", sorted(wide_sel.index.tolist()),
+                                    index=len(wide_sel.index) - 1)
         pie_vals = share.loc[year_for_pie].dropna().sort_values(ascending=False)
         fig_pie = px.pie(values=pie_vals.values, names=pie_vals.index,
                          title=f"Sector Share of Total (%) in {year_for_pie}")
@@ -381,54 +377,41 @@ with tab4:
         st.success("Detected a 'state' column ✅ Showing state-level analysis.")
         reg = df.copy()
         reg = reg[reg["year"].between(year_range[0], year_range[1])]
-
-        if level == "category":
-            reg_sector = st.selectbox("Choose category", sorted(reg["category"].unique()))
-            reg = reg[reg["category"] == reg_sector]
-        else:
-            reg_sector = st.selectbox("Choose function", sorted(reg["function"].unique()))
-            reg = reg[reg["function"] == reg_sector]
-
         reg_p = reg.groupby(["year", "state"])["value"].sum().reset_index()
         pivot_reg = reg_p.pivot(index="state", columns="year", values="value")
-
-        st.write("**Heatmap (State x Year)**")
-        fig_hm = px.imshow(pivot_reg, aspect="auto", title=f"State Allocation Heatmap ({reg_sector})")
+        fig_hm = px.imshow(pivot_reg, aspect="auto", title="State Allocation Heatmap")
         st.plotly_chart(fig_hm, use_container_width=True)
     else:
-        st.info("No state-level column found in this dataset, so regional allocation analysis is not available.")
+        st.info("No state-level column found in this dataset.")
 
     st.divider()
     st.subheader("8. Comparative Analysis (ASEAN benchmarking)")
-    st.write("Upload an ASEAN file with columns: `country, year, sector, value`")
-    st.code("country, year, sector, value", language="text")
-
+    st.write("Upload ASEAN CSV with columns: `country, year, sector, value`")
     asean_file = st.file_uploader("Upload ASEAN benchmark CSV (optional)", type=["csv"], key="asean")
+
     if asean_file is not None:
         asean = pd.read_csv(asean_file)
-
         for c in ["country", "sector"]:
             if c in asean.columns:
                 asean[c] = asean[c].astype(str).str.strip().str.lower()
-
         asean["year"] = pd.to_numeric(asean["year"], errors="coerce").astype("Int64")
         asean["value"] = pd.to_numeric(asean["value"], errors="coerce")
         asean = asean.dropna(subset=["year", "value", "country", "sector"])
 
-        sector_pick = st.selectbox("Choose sector for ASEAN comparison", sorted(asean["sector"].unique()))
+        sector_pick = st.selectbox("Choose sector", sorted(asean["sector"].unique()))
         years_common = sorted(set(asean["year"].dropna().astype(int).unique()) & set(wide_sel.index))
 
-        if len(years_common) == 0:
-            st.warning("No overlapping years between your dataset and ASEAN file.")
+        if not years_common:
+            st.warning("No overlapping years with your dataset.")
         else:
-            yr_pick = st.selectbox("Choose year (overlapping)", years_common, index=len(years_common)-1)
+            yr_pick = st.selectbox("Choose year", years_common, index=len(years_common) - 1)
+
+            comp = asean[(asean["sector"] == sector_pick) & (asean["year"] == yr_pick)].copy()
+            comp = comp.sort_values("value", ascending=False)
 
             my_val = None
             if sector_pick in wide.columns and yr_pick in wide.index:
                 my_val = wide.loc[yr_pick, sector_pick]
-
-            comp = asean[(asean["sector"] == sector_pick) & (asean["year"] == yr_pick)].copy()
-            comp = comp.sort_values("value", ascending=False)
 
             if my_val is not None and pd.notna(my_val):
                 comp = pd.concat([comp, pd.DataFrame([{
@@ -441,10 +424,10 @@ with tab4:
             fig_cmp = px.bar(comp, x="country", y="value", title=f"ASEAN Benchmark: {sector_pick} ({yr_pick})")
             st.plotly_chart(fig_cmp, use_container_width=True)
     else:
-        st.info("No ASEAN file uploaded. Benchmarking section will remain inactive.")
+        st.info("No ASEAN file uploaded.")
 
 # =========================
-# Footer: show raw data
+# Footer
 # =========================
 with st.expander("Show raw data (first 50 rows)"):
     st.dataframe(df.head(50), use_container_width=True)
