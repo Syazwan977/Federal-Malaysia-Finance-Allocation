@@ -5,6 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 from statsmodels.tsa.arima.model import ARIMA
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 # =========================
 # Config
@@ -183,18 +185,18 @@ if not selected_sectors:
 wide_sel = wide_f[selected_sectors]
 
 # =========================
-# Layout (ADD TAB 5)
+# Layout
 # =========================
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1) Summary Statistics",
     "2) Distribution + Outliers",
     "3) Correlations",
     "4) Trends + Prioritization + Benchmarks",
-    "5) Forecasting (ARIMA)"
+    "5) Forecasting (ARIMA vs LR)"
 ])
 
 # =========================
-# TAB 1: Summary Statistics
+# TAB 1
 # =========================
 with tab1:
     st.subheader("1. Summary Statistics")
@@ -226,7 +228,7 @@ with tab1:
     st.plotly_chart(fig_latest, use_container_width=True)
 
 # =========================
-# TAB 2: Distribution + Outliers
+# TAB 2
 # =========================
 with tab2:
     st.subheader("2. Distribution Analysis")
@@ -301,7 +303,7 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# TAB 3: Correlations
+# TAB 3
 # =========================
 with tab3:
     st.subheader("3. Correlation Analysis")
@@ -330,7 +332,7 @@ with tab3:
     st.info("GDP growth correlation needs a separate GDP growth dataset (year + GDP growth).")
 
 # =========================
-# TAB 4: Trends + Prioritization + Benchmarks
+# TAB 4
 # =========================
 with tab4:
     st.subheader("4. Trend Analysis (1970–2023)")
@@ -425,71 +427,160 @@ with tab4:
         st.info("No ASEAN file uploaded.")
 
 # =========================
-# TAB 5: Forecasting (ARIMA)  ✅ ADDED
+# TAB 5: Forecasting (ARIMA vs Linear Regression)
 # =========================
 with tab5:
-    st.subheader("9. Forecasting Allocation Trends using ARIMA")
+    st.subheader("9. Forecasting Allocation Trends (ARIMA vs Linear Regression)")
 
     st.write(
-        "ARIMA forecasts future values based on past allocation patterns. "
-        "Choose a sector, model order, and forecast horizon."
+        "Compare **ARIMA** (time-series) vs **Simple Linear Regression** (trend using year). "
+        "Both models forecast the next N years. Optionally evaluate using a holdout (last N years)."
     )
 
-    sector_forecast = st.selectbox("Select sector to forecast", list(wide_sel.columns), key="arima_sector")
-    horizon = st.slider("Forecast horizon (years)", 1, 10, 5, key="arima_horizon")
+    sector_forecast = st.selectbox("Select sector to forecast", list(wide_sel.columns), key="fc_sector")
+    horizon = st.slider("Forecast horizon (years)", 1, 10, 5, key="fc_horizon")
 
-    # Optional model order inputs (safe defaults)
+    st.divider()
+    st.markdown("### Optional: Holdout evaluation (last N years as test set)")
+    use_holdout = st.checkbox("Enable holdout evaluation", value=True, key="use_holdout")
+    test_size = st.slider("Test size (years)", 3, 12, 5, key="test_size") if use_holdout else 0
+
+    st.divider()
+    st.markdown("### ARIMA settings")
     colp, cold, colq = st.columns(3)
     with colp:
-        p = st.number_input("AR (p)", 0, 5, 1, key="arima_p")
+        p = st.number_input("AR (p)", 0, 5, 1, key="arima_p_fc")
     with cold:
-        d = st.number_input("Diff (d)", 0, 2, 1, key="arima_d")
+        d = st.number_input("Diff (d)", 0, 2, 1, key="arima_d_fc")
     with colq:
-        q = st.number_input("MA (q)", 0, 5, 1, key="arima_q")
+        q = st.number_input("MA (q)", 0, 5, 1, key="arima_q_fc")
 
     series = wide_sel[sector_forecast].dropna()
 
     if len(series) < 12:
-        st.warning("Not enough data points for ARIMA. Please select a wider year range or another sector.")
+        st.warning("Not enough data points. Please select a wider year range or another sector.")
+        st.stop()
+
+    # Train/Test split
+    if use_holdout and test_size > 0 and len(series) > test_size + 5:
+        train = series.iloc[:-test_size]
+        test = series.iloc[-test_size:]
     else:
-        try:
-            model = ARIMA(series, order=(int(p), int(d), int(q)))
-            fitted = model.fit()
+        train = series
+        test = None
 
-            forecast = fitted.forecast(steps=horizon)
-            last_year = int(series.index.max())
-            forecast_years = list(range(last_year + 1, last_year + horizon + 1))
+    # Linear Regression
+    X_train = train.index.values.reshape(-1, 1).astype(float)
+    y_train = train.values.astype(float)
+    lr = LinearRegression()
+    lr.fit(X_train, y_train)
 
-            hist_df = pd.DataFrame({"year": series.index.astype(int), "actual": series.values})
-            fc_df = pd.DataFrame({"year": forecast_years, "forecast": forecast.values})
+    last_train_year = int(train.index.max())
+    fc_years = list(range(last_train_year + 1, last_train_year + horizon + 1))
+    X_future = np.array(fc_years).reshape(-1, 1).astype(float)
+    lr_fc = lr.predict(X_future)
 
-            fig = go.Figure()
+    # ARIMA
+    arima_ok = True
+    try:
+        arima_model = ARIMA(train, order=(int(p), int(d), int(q)))
+        arima_fitted = arima_model.fit()
+        arima_fc = arima_fitted.forecast(steps=horizon).values
+    except Exception as e:
+        arima_ok = False
+        arima_fc = np.array([np.nan] * horizon)
+        st.error("ARIMA model failed. Try a different order (p,d,q) like (1,1,1) or (0,1,1).")
+        st.code(str(e))
 
-            fig.add_trace(go.Scatter(
-                x=hist_df["year"], y=hist_df["actual"],
-                mode="lines+markers", name="Actual"
-            ))
+    # Forecast comparison table
+    fc_df = pd.DataFrame({
+        "year": fc_years,
+        "ARIMA_forecast": arima_fc,
+        "LinearRegression_forecast": lr_fc
+    })
 
-            fig.add_trace(go.Scatter(
-                x=fc_df["year"], y=fc_df["forecast"],
-                mode="lines+markers", name="Forecast",
-                line=dict(dash="dash")
-            ))
+    # Plot
+    hist_df = pd.DataFrame({"year": series.index.astype(int), "actual": series.values})
 
-            fig.update_layout(
-                title=f"ARIMA Forecast for {sector_forecast} (order=({p},{d},{q}))",
-                xaxis_title="Year",
-                yaxis_title="Allocation"
-            )
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hist_df["year"], y=hist_df["actual"],
+        mode="lines+markers", name="Actual"
+    ))
 
-            st.plotly_chart(fig, use_container_width=True)
+    if arima_ok:
+        fig.add_trace(go.Scatter(
+            x=fc_df["year"], y=fc_df["ARIMA_forecast"],
+            mode="lines+markers", name="ARIMA Forecast",
+            line=dict(dash="dash")
+        ))
 
-            st.write("**Forecast table:**")
-            st.dataframe(fc_df, use_container_width=True)
+    fig.add_trace(go.Scatter(
+        x=fc_df["year"], y=fc_df["LinearRegression_forecast"],
+        mode="lines+markers", name="Linear Regression Forecast",
+        line=dict(dash="dot")
+    ))
 
-        except Exception as e:
-            st.error("ARIMA model failed. Try a different order (p,d,q) like (1,1,1) or (0,1,1).")
-            st.code(str(e))
+    fig.update_layout(
+        title=f"Forecast Comparison: {sector_forecast} | ARIMA({p},{d},{q}) vs Linear Regression",
+        xaxis_title="Year",
+        yaxis_title="Allocation"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.write("**Forecast comparison table:**")
+    st.dataframe(fc_df, use_container_width=True)
+
+    # Holdout evaluation
+    if test is not None and len(test) >= 3:
+        st.divider()
+        st.subheader("Holdout Evaluation (Test = last N years)")
+
+        X_test = test.index.values.reshape(-1, 1).astype(float)
+        lr_pred = lr.predict(X_test)
+
+        if arima_ok:
+            arima_pred = arima_fitted.forecast(steps=len(test)).values
+        else:
+            arima_pred = np.array([np.nan] * len(test))
+
+        eval_df = pd.DataFrame({
+            "year": test.index.astype(int),
+            "actual": test.values.astype(float),
+            "ARIMA_pred": arima_pred.astype(float),
+            "LR_pred": lr_pred.astype(float)
+        })
+
+        st.write("**Predictions on test years:**")
+        st.dataframe(eval_df, use_container_width=True)
+
+        def rmse(y_true, y_pred):
+            return float(np.sqrt(mean_squared_error(y_true, y_pred)))
+
+        lr_mae = mean_absolute_error(eval_df["actual"], eval_df["LR_pred"])
+        lr_rmse = rmse(eval_df["actual"], eval_df["LR_pred"])
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("LR MAE", f"{lr_mae:.4f}")
+            st.metric("LR RMSE", f"{lr_rmse:.4f}")
+
+        with c2:
+            if arima_ok and np.isfinite(eval_df["ARIMA_pred"]).all():
+                arima_mae = mean_absolute_error(eval_df["actual"], eval_df["ARIMA_pred"])
+                arima_rmse = rmse(eval_df["actual"], eval_df["ARIMA_pred"])
+                st.metric("ARIMA MAE", f"{arima_mae:.4f}")
+                st.metric("ARIMA RMSE", f"{arima_rmse:.4f}")
+            else:
+                st.info("ARIMA metrics unavailable (ARIMA failed).")
+
+        with c3:
+            if arima_ok and np.isfinite(eval_df["ARIMA_pred"]).all():
+                winner = "ARIMA" if arima_rmse < lr_rmse else "Linear Regression"
+                st.metric("Winner (lower RMSE)", winner)
+            else:
+                st.metric("Winner (lower RMSE)", "Linear Regression")
 
 # =========================
 # Footer
