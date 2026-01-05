@@ -5,7 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 from statsmodels.tsa.arima.model import ARIMA
-
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 # =========================
 # Config
@@ -90,26 +91,6 @@ else:  # Local path
 # =========================
 # Helper: build sector view
 # =========================
-# =========================
-# Simple Linear Regression (NumPy only)
-# =========================
-def linear_regression_fit(x, y):
-    """
-    Fit y = a*x + b using least squares
-    """
-    a, b = np.polyfit(x, y, 1)
-    return a, b
-
-def linear_regression_predict(a, b, x):
-    return a * x + b
-
-def rmse(y_true, y_pred):
-    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-
-def mae(y_true, y_pred):
-    return float(np.mean(np.abs(y_true - y_pred)))
-
-
 def build_wide(df, level="category", include_total=False):
     d = df.copy()
 
@@ -446,7 +427,7 @@ with tab4:
         st.info("No ASEAN file uploaded.")
 
 # =========================
-# TAB 5: Forecasting (ARIMA vs Linear Regression) + COMPARISON PLOTS ✅
+# TAB 5: Forecasting (ARIMA vs Linear Regression)
 # =========================
 with tab5:
     st.subheader("9. Forecasting Allocation Trends (ARIMA vs Linear Regression)")
@@ -518,71 +499,35 @@ with tab5:
         "LinearRegression_forecast": lr_fc
     })
 
-    # =========================
-    # PLOT 1: Actual + Forecasts
-    # =========================
+    # Plot
     hist_df = pd.DataFrame({"year": series.index.astype(int), "actual": series.values})
 
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
         x=hist_df["year"], y=hist_df["actual"],
         mode="lines+markers", name="Actual"
     ))
-    fig1.add_trace(go.Scatter(
-        x=fc_df["year"], y=fc_df["ARIMA_forecast"],
-        mode="lines+markers", name="ARIMA Forecast",
-        line=dict(dash="dash")
-    ))
-    fig1.add_trace(go.Scatter(
+
+    if arima_ok:
+        fig.add_trace(go.Scatter(
+            x=fc_df["year"], y=fc_df["ARIMA_forecast"],
+            mode="lines+markers", name="ARIMA Forecast",
+            line=dict(dash="dash")
+        ))
+
+    fig.add_trace(go.Scatter(
         x=fc_df["year"], y=fc_df["LinearRegression_forecast"],
         mode="lines+markers", name="Linear Regression Forecast",
         line=dict(dash="dot")
     ))
-    fig1.update_layout(
-        title=f"Forecast Comparison (Actual vs ARIMA vs Linear Regression): {sector_forecast}",
+
+    fig.update_layout(
+        title=f"Forecast Comparison: {sector_forecast} | ARIMA({p},{d},{q}) vs Linear Regression",
         xaxis_title="Year",
         yaxis_title="Allocation"
     )
-    st.plotly_chart(fig1, use_container_width=True)
 
-    # =========================
-    # PLOT 2: Predicted values only (ARIMA vs LR)
-    # =========================
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(
-        x=fc_df["year"], y=fc_df["ARIMA_forecast"],
-        mode="lines+markers", name="ARIMA Predicted",
-        line=dict(dash="dash")
-    ))
-    fig2.add_trace(go.Scatter(
-        x=fc_df["year"], y=fc_df["LinearRegression_forecast"],
-        mode="lines+markers", name="Linear Regression Predicted",
-        line=dict(dash="dot")
-    ))
-    fig2.update_layout(
-        title=f"Predicted Values Only (ARIMA vs Linear Regression): {sector_forecast}",
-        xaxis_title="Year",
-        yaxis_title="Predicted Allocation"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # =========================
-    # PLOT 3: Difference (ARIMA - LR)
-    # =========================
-    diff_df = fc_df.copy()
-    diff_df["diff_ARIMA_minus_LR"] = diff_df["ARIMA_forecast"] - diff_df["LinearRegression_forecast"]
-
-    fig3 = go.Figure()
-    fig3.add_trace(go.Bar(
-        x=diff_df["year"], y=diff_df["diff_ARIMA_minus_LR"],
-        name="ARIMA - Linear Regression"
-    ))
-    fig3.update_layout(
-        title=f"Prediction Difference (ARIMA - Linear Regression): {sector_forecast}",
-        xaxis_title="Year",
-        yaxis_title="Difference in Predicted Allocation"
-    )
-    st.plotly_chart(fig3, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
     st.write("**Forecast comparison table:**")
     st.dataframe(fc_df, use_container_width=True)
@@ -644,4 +589,3 @@ with st.expander("Show raw data (first 50 rows)"):
     st.dataframe(df.head(50), use_container_width=True)
 
 st.caption("Dashboard ready for CRISP-DM Data Understanding → Data Exploration deliverables.")
-
