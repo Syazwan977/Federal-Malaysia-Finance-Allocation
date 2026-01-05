@@ -4,6 +4,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+from statsmodels.tsa.arima.model import ARIMA
 
 # =========================
 # Config
@@ -22,10 +23,7 @@ data_mode = st.sidebar.radio(
     index=0
 )
 
-# ✅ Expected path in GitHub repo
 REPO_DATA_PATH = Path("data") / "federal_finance.csv"
-
-# ✅ Local path (works ONLY on your PC)
 LOCAL_DATA_PATH = r"C:\Users\User\OneDrive - National Defence University of Malaysia\Documents\BIG DATA\federal_finance_year_de (1).csv"
 
 @st.cache_data
@@ -56,7 +54,6 @@ if data_mode == "Use repo dataset (GitHub/Streamlit Cloud)":
             "Open your GitHub repo → create folder `data/` → upload the CSV renamed as `federal_finance.csv`."
         )
 
-        # Helpful debug (shows what Cloud sees)
         st.write("### Debug: Files in repo root")
         st.code("\n".join(sorted([p.name for p in Path('.').iterdir() if p.is_file()])))
         if Path("data").exists():
@@ -128,7 +125,6 @@ def build_wide(df, level="category", include_total=False):
 
     return wide, total_series
 
-
 def summary_stats(wide_df):
     stats = pd.DataFrame({
         "mean": wide_df.mean(),
@@ -142,7 +138,6 @@ def summary_stats(wide_df):
         "latest_year": wide_df.index.max()
     }).sort_values("latest", ascending=False)
     return stats
-
 
 def detect_outliers_zscore(series, window=7, z_thresh=2.5):
     s = series.dropna().copy()
@@ -188,13 +183,14 @@ if not selected_sectors:
 wide_sel = wide_f[selected_sectors]
 
 # =========================
-# Layout
+# Layout (ADD TAB 5)
 # =========================
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1) Summary Statistics",
     "2) Distribution + Outliers",
     "3) Correlations",
-    "4) Trends + Prioritization + Benchmarks"
+    "4) Trends + Prioritization + Benchmarks",
+    "5) Forecasting (ARIMA)"
 ])
 
 # =========================
@@ -297,8 +293,10 @@ with tab2:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=wide_sel.index, y=wide_sel[sector_for_plot], mode="lines+markers", name="allocation"))
         out_pts = out_s[out_s["is_outlier"]]
-        fig.add_trace(go.Scatter(x=out_pts.index, y=out_pts["value"], mode="markers", name="outliers",
-                                 marker=dict(size=12, symbol="x")))
+        fig.add_trace(go.Scatter(
+            x=out_pts.index, y=out_pts["value"], mode="markers",
+            name="outliers", marker=dict(size=12, symbol="x")
+        ))
         fig.update_layout(title=f"Outliers for {sector_for_plot} (Rolling z-score)")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -425,6 +423,73 @@ with tab4:
             st.plotly_chart(fig_cmp, use_container_width=True)
     else:
         st.info("No ASEAN file uploaded.")
+
+# =========================
+# TAB 5: Forecasting (ARIMA)  ✅ ADDED
+# =========================
+with tab5:
+    st.subheader("9. Forecasting Allocation Trends using ARIMA")
+
+    st.write(
+        "ARIMA forecasts future values based on past allocation patterns. "
+        "Choose a sector, model order, and forecast horizon."
+    )
+
+    sector_forecast = st.selectbox("Select sector to forecast", list(wide_sel.columns), key="arima_sector")
+    horizon = st.slider("Forecast horizon (years)", 1, 10, 5, key="arima_horizon")
+
+    # Optional model order inputs (safe defaults)
+    colp, cold, colq = st.columns(3)
+    with colp:
+        p = st.number_input("AR (p)", 0, 5, 1, key="arima_p")
+    with cold:
+        d = st.number_input("Diff (d)", 0, 2, 1, key="arima_d")
+    with colq:
+        q = st.number_input("MA (q)", 0, 5, 1, key="arima_q")
+
+    series = wide_sel[sector_forecast].dropna()
+
+    if len(series) < 12:
+        st.warning("Not enough data points for ARIMA. Please select a wider year range or another sector.")
+    else:
+        try:
+            model = ARIMA(series, order=(int(p), int(d), int(q)))
+            fitted = model.fit()
+
+            forecast = fitted.forecast(steps=horizon)
+            last_year = int(series.index.max())
+            forecast_years = list(range(last_year + 1, last_year + horizon + 1))
+
+            hist_df = pd.DataFrame({"year": series.index.astype(int), "actual": series.values})
+            fc_df = pd.DataFrame({"year": forecast_years, "forecast": forecast.values})
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=hist_df["year"], y=hist_df["actual"],
+                mode="lines+markers", name="Actual"
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=fc_df["year"], y=fc_df["forecast"],
+                mode="lines+markers", name="Forecast",
+                line=dict(dash="dash")
+            ))
+
+            fig.update_layout(
+                title=f"ARIMA Forecast for {sector_forecast} (order=({p},{d},{q}))",
+                xaxis_title="Year",
+                yaxis_title="Allocation"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.write("**Forecast table:**")
+            st.dataframe(fc_df, use_container_width=True)
+
+        except Exception as e:
+            st.error("ARIMA model failed. Try a different order (p,d,q) like (1,1,1) or (0,1,1).")
+            st.code(str(e))
 
 # =========================
 # Footer
