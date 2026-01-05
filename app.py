@@ -5,8 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 from statsmodels.tsa.arima.model import ARIMA
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+
 
 # =========================
 # Config
@@ -91,6 +90,26 @@ else:  # Local path
 # =========================
 # Helper: build sector view
 # =========================
+# =========================
+# Simple Linear Regression (NumPy only)
+# =========================
+def linear_regression_fit(x, y):
+    """
+    Fit y = a*x + b using least squares
+    """
+    a, b = np.polyfit(x, y, 1)
+    return a, b
+
+def linear_regression_predict(a, b, x):
+    return a * x + b
+
+def rmse(y_true, y_pred):
+    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+
+def mae(y_true, y_pred):
+    return float(np.mean(np.abs(y_true - y_pred)))
+
+
 def build_wide(df, level="category", include_total=False):
     d = df.copy()
 
@@ -625,3 +644,4 @@ with st.expander("Show raw data (first 50 rows)"):
     st.dataframe(df.head(50), use_container_width=True)
 
 st.caption("Dashboard ready for CRISP-DM Data Understanding → Data Exploration deliverables.")
+
